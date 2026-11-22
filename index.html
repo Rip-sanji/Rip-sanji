@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Batalha Ninja</title>
+<style>
+  :root { --bg:#14121c; --panel:#221e30; --text:#f3eee4; --accent:#ff8a1f; --muted:#a59fb5; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family: "Trebuchet MS", system-ui, sans-serif; overflow:hidden; touch-action:none; }
+  #wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; padding:8px 16px; }
+  canvas { width:100%; max-width:960px; aspect-ratio:16/9; background:#000; border-radius:10px;
+    box-shadow:0 10px 40px rgba(0,0,0,.6); image-rendering:auto; }
+  #help { color:var(--muted); font-size:13px; margin-top:8px; text-align:center; max-width:960px; line-height:1.5; }
+  #help b { color:var(--accent); }
+  #touch { display:none; width:100%; max-width:960px; justify-content:space-between; margin-top:10px; gap:8px; }
+  #touch .grp { display:flex; gap:8px; }
+  #touch button { width:58px; height:58px; border-radius:50%; border:2px solid #fff3; background:#ffffff14;
+    color:var(--text); font-size:13px; font-weight:bold; user-select:none; -webkit-user-select:none; }
+  #touch button:active { background:#ff8a1f66; }
+  @media (pointer:coarse) { #touch { display:flex; } #help { display:none; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="960" height="540"></canvas>
+  <div id="help">
+    <b>Jogador 1:</b> A/D andar · W pular · J ataque · K poder 1 · L poder 2 &nbsp;|&nbsp;
+    <b>Jogador 2:</b> ←/→ andar · ↑ pular · 1 ataque · 2 poder 1 · 3 poder 2 &nbsp;|&nbsp;
+    Segure <b>S</b> (ou ↓) para concentrar chakra
+  </div>
+  <div id="touch">
+    <div class="grp">
+      <button data-k="left">◀</button><button data-k="up">▲</button><button data-k="right">▶</button><button data-k="down">CK</button>
+    </div>
+    <div class="grp">
+      <button data-k="atk">ATK</button><button data-k="p1">P1</button><button data-k="p2">P2</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = 960, H = 540, GROUND = 450, GRAV = 0.8;
+
+// ---------- Personagens ----------
+const CHARS = [
+  { id:'naruto', name:'Naruto', color:'#ff8a1f', hair:'#ffd23f', speed:4.6, hp:100,
+    powers:[
+      { name:'Rasengan', cost:30, cd:50, fn:'rasengan' },
+      { name:'Kage Bunshin', cost:45, cd:120, fn:'clones' } ] },
+  { id:'sasuke', name:'Sasuke', color:'#3b3f8f', hair:'#1b1b2a', speed:5, hp:95,
+    powers:[
+      { name:'Katon: Bola de Fogo', cost:25, cd:45, fn:'fireball' },
+      { name:'Chidori', cost:40, cd:80, fn:'chidori' } ] },
+  { id:'sakura', name:'Sakura', color:'#d9365b', hair:'#ff9ec7', speed:4.4, hp:105,
+    powers:[
+      { name:'Soco Sísmico', cost:30, cd:60, fn:'quake' },
+      { name:'Cura Médica', cost:40, cd:150, fn:'heal' } ] },
+  { id:'kakashi', name:'Kakashi', color:'#2f5e46', hair:'#d9dde3', speed:4.8, hp:100,
+    powers:[
+      { name:'Chuva de Kunais', cost:25, cd:45, fn:'kunais' },
+      { name:'Raikiri', cost:45, cd:90, fn:'chidori' } ] },
+  { id:'gaara', name:'Gaara', color:'#8a3a2a', hair:'#c2301f', speed:4, hp:115,
+    powers:[
+      { name:'Caixão de Areia', cost:35, cd:70, fn:'sand' },
+      { name:'Escudo de Areia', cost:30, cd:140, fn:'shield' } ] },
+];
+
+// ---------- Input ----------
+const keys = {};
+addEventListener('keydown', e => { keys[e.code] = true; if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault(); onMenuKey(e.code); });
+addEventListener('keyup', e => keys[e.code] = false);
+const touch = {};
+document.querySelectorAll('#touch button').forEach(b => {
+  const k = b.dataset.k;
+  const on = e => { e.preventDefault(); touch[k] = true; onMenuTouch(k); };
+  const off = e => { e.preventDefault(); touch[k] = false; };
+  b.addEventListener('touchstart', on); b.addEventListener('touchend', off); b.addEventListener('touchcancel', off);
+  b.addEventListener('mousedown', on); b.addEventListener('mouseup', off); b.addEventListener('mouseleave', off);
+});
+const P1KEYS = { left:'KeyA', right:'KeyD', up:'KeyW', down:'KeyS', atk:'KeyJ', p1:'KeyK', p2:'KeyL' };
+const P2KEYS = { left:'ArrowLeft', right:'ArrowRight', up:'ArrowUp', down:'ArrowDown', atk:'Digit1', p1:'Digit2', p2:'Digit3' };
+function readHuman(map, useTouch) {
+  const r = {};
+  for (const k in map) r[k] = !!keys[map[k]] || (useTouch && !!touch[k]);
+  if (map === P2KEYS) { r.atk ||= keys['Numpad1']; r.p1 ||= keys['Numpad2']; r.p2 ||= keys['Numpad3']; }
+  return r;
+}
+
+// ---------- Estado ----------
+let state = 'title';   // title, select, fight, over
+let mode = 0;          // 0 = vs CPU, 1 = 2 jogadores
+let sel = [0, 1], selStep = 0;
+let fighters = [], projectiles = [], particles = [], texts = [];
+let shake = 0, winner = null, roundTimer = 0, introTimer = 0, frame = 0;
+
+class Fighter {
+  constructor(ch, x, dir, idx) {
+    Object.assign(this, { ch, x, y:GROUND, vx:0, vy:0, dir, idx });
+    this.hp = ch.hp; this.maxHp = ch.hp; this.chakra = 50;
+    this.cds = [0,0]; this.atkT = 0; this.hurtT = 0; this.stun = 0;
+    this.dash = 0; this.shield = 0; this.healT = 0; this.charging = false;
+    this.isClone = false; this.life = 0; this.combo = 0; this.aiT = 0; this.ai = {};
+  }
+  get onGround() { return this.y >= GROUND; }
+  get enemy() { return fighters.find(f => f.idx !== this.idx && !f.isClone); }
+}
+
+function startFight() {
+  fighters = [ new Fighter(CHARS[sel[0]], 220, 1, 0), new Fighter(CHARS[sel[1]], 740, -1, 1) ];
+  projectiles = []; particles = []; texts = [];
+  winner = null; introTimer = 120; roundTimer = 99 * 60; state = 'fight';
+}
+
+// ---------- Poderes ----------
+const POWERS = {
+  rasengan(f) {
+    projectiles.push({ owner:f, x:f.x + f.dir*40, y:f.y-60, vx:f.dir*9, vy:0, r:22, dmg:18, kb:12,
+      life:45, kind:'rasengan' });
+  },
+  clones(f) {
+    for (let i = 0; i < 2; i++) {
+      const c = new Fighter(f.ch, f.x - f.dir*(40 + i*30), f.dir, f.idx);
+      c.isClone = true; c.life = 240; c.hp = 1; c.owner = f; c.chakra = 0;
+      fighters.push(c);
+      puff(c.x, c.y - 50);
+    }
+  },
+  fireball(f) {
+    projectiles.push({ owner:f, x:f.x + f.dir*40, y:f.y-70, vx:f.dir*7, vy:0, r:30, dmg:15, kb:9,
+      life:80, kind:'fire' });
+  },
+  chidori(f) {
+    f.dash = 22; f.vx = f.dir * 15; f.dashHit = false;
+  },
+  quake(f) {
+    shake = 18;
+    for (const dir of [-1, 1])
+      projectiles.push({ owner:f, x:f.x, y:GROUND-12, vx:dir*8, vy:0, r:18, dmg:14, kb:10, life:50,
+        kind:'quake', ground:true });
+  },
+  heal(f) { f.healT = 90; },
+  kunais(f) {
+    for (let i = -1; i <= 1; i++)
+      projectiles.push({ owner:f, x:f.x + f.dir*30, y:f.y-70 + i*18, vx:f.dir*12, vy:i*1.2, r:8, dmg:7, kb:5,
+        life:60, kind:'kunai' });
+  },
+  sand(f) {
+    const e = f.enemy;
+    projectiles.push({ owner:f, x:e.x, y:GROUND, vx:0, vy:0, r:45, dmg:20, kb:4, life:55, delay:30,
+      kind:'sand', target:e });
+  },
+  shield(f) { f.shield = 180; },
+};
+
+function usePower(f, i) {
+  const p = f.ch.powers[i];
+  if (f.cds[i] > 0 || f.chakra < p.cost || f.stun > 0 || f.dash > 0) return;
+  f.chakra -= p.cost; f.cds[i] = p.cd; f.atkT = 18;
+  POWERS[p.fn](f);
+  if (!f.isClone) texts.push({ x:f.x, y:f.y-140, t:p.name + '!', life:60, color:f.ch.hair });
+}
+
+// ---------- Combate ----------
+function hit(target, dmg, kbDir, kb, attacker) {
+  if (target.isClone) { target.hp = 0; puff(target.x, target.y-50); return; }
+  if (target.shield > 0) { dmg *= 0.25; kb *= 0.2; burst(target.x, target.y-60, '#e0c27a', 8); }
+  target.hp = Math.max(0, target.hp - dmg);
+  target.hurtT = 14; target.stun = 12;
+  target.vx = kbDir * kb; if (kb > 6) target.vy = -6;
+  shake = Math.max(shake, Math.min(14, dmg));
+  burst(target.x, target.y-60, '#fff', 10);
+  texts.push({ x:target.x, y:target.y-110, t:'-' + Math.round(dmg), life:40, color:'#ff5a5a' });
+  if (attacker && !attacker.isClone) attacker.chakra = Math.min(100, attacker.chakra + dmg*0.4);
+}
+
+function basicAttack(f) {
+  if (f.atkT > 0 || f.stun > 0) return;
+  f.atkT = 16; f.combo = (f.combo + 1) % 3;
+  setTimeout(() => {
+    for (const e of fighters) {
+      if (e.idx === f.idx || e.hp <= 0) continue;
+      if (Math.abs(e.x - (f.x + f.dir*45)) < 50 && Math.abs(e.y - f.y) < 80)
+        hit(e, f.combo === 2 ? 9 : 5, f.dir, f.combo === 2 ? 10 : 4, f);
+    }
+  }, 80);
+}
+
+// ---------- IA ----------
+function aiInput(f) {
+  const e = f.isClone ? fighters.find(o => o.idx !== f.idx && !o.isClone) : f.enemy;
+  const r = {};
+  if (!e) return r;
+  const dx = e.x - f.x, dist = Math.abs(dx);
+  if (f.aiT-- <= 0) {
+    f.aiT = 8 + Math.random()*14;
+    f.ai = { want: Math.random() };
+  }
+  const w = f.ai.want || 0;
+  if (f.isClone) {
+    if (dist > 50) { r[dx > 0 ? 'right' : 'left'] = true; } else r.atk = Math.random() < 0.3;
+    return r;
+  }
+  // desviar de projéteis
+  const danger = projectiles.find(p => p.owner.idx !== f.idx && Math.abs(p.x - f.x) < 160 && Math.sign(p.vx) === Math.sign(f.x - p.x));
+  if (danger && w < 0.6 && f.onGround && !danger.ground) r.up = true;
+  if (danger && danger.ground && w < 0.7) r.up = true;
+
+  if (f.chakra < 30 && dist > 300 && w < 0.7) { r.down = true; return r; }
+  if (dist > 70) r[dx > 0 ? 'right' : 'left'] = w > 0.15;
+  else if (w < 0.3) r[dx > 0 ? 'left' : 'right'] = true;
+  if (dist < 70 && w > 0.45 && Math.random() < 0.3) r.atk = true;
+  if (w > 0.93) r.p1 = true;
+  if (w > 0.88 && w < 0.91) r.p2 = true;
+  if (f.ch.id === 'sakura' && f.hp < 45 && w > 0.5) r.p2 = true;
+  if (w > 0.97 && f.onGround) r.up = true;
+  return r;
+}
+
+// ---------- Atualização ----------
+function updateFighter(f, inp) {
+  if (f.hp <= 0) return;
+  if (f.isClone && --f.life <= 0) { f.hp = 0; puff(f.x, f.y-50); return; }
+  for (let i = 0; i < 2; i++) if (f.cds[i] > 0) f.cds[i]--;
+  if (f.atkT > 0) f.atkT--;
+  if (f.hurtT > 0) f.hurtT--;
+  if (f.shield > 0) f.shield--;
+  if (f.healT > 0) { f.healT--; f.hp = Math.min(f.maxHp, f.hp + 0.3);
+    if (frame % 6 === 0) particles.push({ x:f.x + (Math.random()-0.5)*50, y:f.y - Math.random()*100, vx:0, vy:-1.5, life:30, color:'#6dff9e', s:4 }); }
+
+  const e = f.enemy;
+  if (e && f.dash <= 0 && f.atkT <= 0) f.dir = e.x > f.x ? 1 : -1;
+  if (f.isClone) { const t = fighters.find(o => o.idx !== f.idx && !o.isClone); if (t) f.dir = t.x > f.x ? 1 : -1; }
+
+  f.charging = false;
+  if (f.dash > 0) {
+    f.dash--;
+    particles.push({ x:f.x, y:f.y-60 + (Math.random()-0.5)*30, vx:-f.dir*2, vy:(Math.random()-0.5)*2, life:20, color:'#9fe3ff', s:4 });
+    if (!f.dashHit) for (const o of fighters) {
+      if (o.idx === f.idx || o.hp <= 0) continue;
+      if (Math.abs(o.x - f.x) < 50 && Math.abs(o.y - f.y) < 80) { hit(o, 22, f.dir, 14, f); f.dashHit = true; f.dash = 0; f.vx = 0; }
+    }
+    if (f.dash === 0) f.vx = 0;
+  } else if (f.stun > 0) {
+    f.stun--; f.vx *= 0.88;
+  } else {
+    let mv = 0;
+    if (inp.left) mv -= 1;
+    if (inp.right) mv += 1;
+    if (inp.down && f.onGround && !f.isClone) {
+      f.charging = true; mv = 0;
+      f.chakra = Math.min(100, f.chakra + 0.5);
+      if (frame % 3 === 0) particles.push({ x:f.x + (Math.random()-0.5)*60, y:GROUND, vx:0, vy:-2-Math.random()*2, life:30, color:'#5ab8ff', s:3 });
+    }
+    f.vx = mv * f.ch.speed * (f.atkT > 0 ? 0.4 : 1);
+    if (inp.up && f.onGround) f.vy = -15;
+    if (inp.atk) basicAttack(f);
+    if (!f.isClone) { if (inp.p1) usePower(f, 0); if (inp.p2) usePower(f, 1); }
+  }
+  f.chakra = Math.min(100, f.chakra + 0.03);
+  f.vy += GRAV; f.x += f.vx; f.y += f.vy;
+  if (f.y > GROUND) { f.y = GROUND; f.vy = 0; }
+  f.x = Math.max(30, Math.min(W - 30, f.x));
+}
+
+function updateProjectiles() {
+  for (const p of projectiles) {
+    if (p.delay > 0) { p.delay--; if (p.target) p.x += (p.target.x - p.x) * 0.15;
+      if (frame % 2 === 0) particles.push({ x:p.x + (Math.random()-0.5)*60, y:GROUND, vx:0, vy:-1, life:20, color:'#d8b36a', s:4 });
+      continue; }
+    p.x += p.vx; p.y += p.vy; p.life--;
+    if (p.kind === 'fire' && frame % 2 === 0) particles.push({ x:p.x, y:p.y, vx:-p.vx*0.2, vy:(Math.random()-0.5)*2, life:20, color: Math.random()<0.5?'#ffcf3f':'#ff5a1f', s:6 });
+    if (p.kind === 'rasengan' && frame % 2 === 0) particles.push({ x:p.x, y:p.y, vx:(Math.random()-0.5)*3, vy:(Math.random()-0.5)*3, life:14, color:'#bfe9ff', s:3 });
+    if (p.kind === 'quake') particles.push({ x:p.x, y:GROUND, vx:(Math.random()-0.5)*2, vy:-Math.random()*4, life:20, color:'#8b6a4a', s:5 });
+    if (p.hitDone) continue;
+    for (const f of fighters) {
+      if (f.idx === p.owner.idx || f.hp <= 0) continue;
+      const fy = f.y - 60;
+      const hitY = p.kind === 'sand' ? Math.abs(f.y - GROUND) < 40 : (p.ground ? f.onGround : Math.abs(fy - p.y) < 60 + p.r*0.5);
+      if (Math.abs(f.x - p.x) < 30 + p.r && hitY) {
+        hit(f, p.dmg, Math.sign(p.vx) || (f.x > p.x ? 1 : -1), p.kb, p.owner);
+        if (p.kind === 'sand') { f.stun = 50; p.hitDone = true; }
+        else if (!f.isClone) { p.life = 0; burst(p.x, p.y, p.kind === 'fire' ? '#ff8a1f' : '#bfe9ff', 16); }
+        break;
+      }
+    }
+  }
+  projectiles = projectiles.filter(p => p.life > 0 && p.x > -50 && p.x < W + 50);
+}
+
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) { const a = Math.random()*Math.PI*2, s = 2 + Math.random()*5;
+    particles.push({ x, y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:20 + Math.random()*10, color, s:3 + Math.random()*3 }); }
+}
+function puff(x, y) { for (let i = 0; i < 14; i++) { const a = Math.random()*Math.PI*2;
+  particles.push({ x, y, vx:Math.cos(a)*2, vy:Math.sin(a)*2, life:30, color:'#e8e8e8', s:8 + Math.random()*6 }); } }
+
+// ---------- Desenho ----------
+function drawBg() {
+  const g = ctx.createLinearGradient(0, 0, 0, GROUND);
+  g.addColorStop(0, '#ff9a5a'); g.addColorStop(0.6, '#ffd08a'); g.addColorStop(1, '#ffe7b8');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, GROUND);
+  ctx.fillStyle = '#fff4d6'; ctx.beginPath(); ctx.arc(760, 130, 60, 0, Math.PI*2); ctx.fill();
+  // montanha com rostos (genérica)
+  ctx.fillStyle = '#b07a52';
+  ctx.beginPath(); ctx.moveTo(0, 300); ctx.lineTo(120, 200); ctx.lineTo(300, 180); ctx.lineTo(460, 230); ctx.lineTo(560, 300); ctx.lineTo(0, 300); ctx.fill();
+  // telhados da vila
+  for (let i = 0; i < 9; i++) {
+    const x = i * 115 - 20, h = 60 + (i*37 % 50);
+    ctx.fillStyle = '#e9d3b0'; ctx.fillRect(x, GROUND - h - 40, 90, h + 40);
+    ctx.fillStyle = i % 2 ? '#c8432f' : '#3d6d8f';
+    ctx.beginPath(); ctx.moveTo(x - 10, GROUND - h - 40); ctx.lineTo(x + 45, GROUND - h - 75); ctx.lineTo(x + 100, GROUND - h - 40); ctx.fill();
+    ctx.fillStyle = '#6b4b33'; ctx.fillRect(x + 35, GROUND - 40, 20, 40);
+  }
+  ctx.fillStyle = '#6f8f3e'; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#5c7a31'; for (let i = 0; i < W; i += 24) ctx.fillRect(i, GROUND, 12, 6);
+}
+
+function drawFighter(f) {
+  if (f.hp <= 0 && f.isClone) return;
+  const { x, y, dir, ch } = f;
+  ctx.save();
+  ctx.translate(x, y);
+  if (f.isClone) ctx.globalAlpha = 0.75;
+  if (f.hurtT > 0 && frame % 4 < 2) ctx.globalAlpha *= 0.5;
+  const dead = f.hp <= 0;
+  if (dead) { ctx.rotate(-dir * Math.PI/2); ctx.translate(0, -10); }
+  // sombra
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(0, GROUND - y + 2, 26, 6, 0, 0, Math.PI*2); ctx.fill();
+  // aura de chakra
+  if (f.charging) { ctx.strokeStyle = 'rgba(90,184,255,.7)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.ellipse(0, -60, 40 + Math.sin(frame*0.3)*4, 70, 0, 0, Math.PI*2); ctx.stroke(); }
+  const walk = Math.abs(f.vx) > 0.5 && f.onGround ? Math.sin(frame * 0.35) * 10 : 0;
+  // pernas
+  ctx.strokeStyle = '#2a2a3a'; ctx.lineWidth = 9; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-6, -40); ctx.lineTo(-8 + walk, 0); ctx.moveTo(6, -40); ctx.lineTo(8 - walk, 0); ctx.stroke();
+  // corpo
+  ctx.fillStyle = ch.color; roundRect(-16, -88, 32, 52, 8); ctx.fill();
+  // braços
+  const atk = f.atkT > 0 || f.dash > 0;
+  ctx.strokeStyle = '#f2c9a0'; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.moveTo(dir*8, -80);
+  if (atk) ctx.lineTo(dir*48, -68); else ctx.lineTo(dir*14 - walk*0.5, -48);
+  ctx.moveTo(-dir*8, -80); ctx.lineTo(-dir*16 + walk*0.5, -50); ctx.stroke();
+  // cabeça
+  ctx.fillStyle = '#f2c9a0'; ctx.beginPath(); ctx.arc(0, -104, 17, 0, Math.PI*2); ctx.fill();
+  // cabelo
+  ctx.fillStyle = ch.hair; ctx.beginPath();
+  if (ch.id === 'naruto') { for (let i = -3; i <= 3; i++) { ctx.moveTo(i*6 - 4, -110); ctx.lineTo(i*7, -132 - (i%2?0:6)); ctx.lineTo(i*6 + 4, -110); } ctx.arc(0, -108, 17, Math.PI, 0); }
+  else if (ch.id === 'sakura') { ctx.arc(0, -108, 19, Math.PI, 0); ctx.rect(-19, -108, 7, 26); ctx.rect(12, -108, 7, 26); }
+  else if (ch.id === 'kakashi') { ctx.moveTo(-16, -110); ctx.lineTo(-dir*20, -140); ctx.lineTo(dir*4, -122); ctx.lineTo(dir*18, -142); ctx.lineTo(16, -110); ctx.arc(0, -108, 17, 0, Math.PI, true); }
+  else if (ch.id === 'sasuke') { ctx.arc(0, -108, 18, Math.PI, 0); ctx.moveTo(-dir*10, -118); ctx.lineTo(-dir*34, -128); ctx.lineTo(-dir*14, -106); }
+  else { ctx.arc(0, -108, 18, Math.PI, 0); }
+  ctx.fill();
+  // bandana
+  ctx.fillStyle = ch.id === 'gaara' ? 'transparent' : '#3b4a6b';
+  if (ch.id !== 'gaara') { ctx.fillRect(-17, -114, 34, 6); ctx.fillStyle = '#c9ced8'; ctx.fillRect(-7, -114, 14, 6); }
+  // olhos
+  ctx.fillStyle = (f.dash > 0 && (ch.id === 'sasuke' || ch.id === 'kakashi')) ? '#e01b1b' : '#1b1b2a';
+  ctx.fillRect(dir*5, -104, 4, 4); ctx.fillRect(dir*12, -104, 3, 4);
+  if (ch.id === 'kakashi') { ctx.fillStyle = '#2b3242'; ctx.fillRect(-15, -98, 30, 10); }
+  // chidori na mão
+  if (f.dash > 0) { ctx.strokeStyle = '#bfefff'; ctx.lineWidth = 2; for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.moveTo(dir*48, -68);
+    ctx.lineTo(dir*48 + (Math.random()-0.5)*40, -68 + (Math.random()-0.5)*40); ctx.stroke(); } }
+  // escudo
+  if (f.shield > 0) { ctx.strokeStyle = 'rgba(216,179,106,.8)'; ctx.fillStyle = 'rgba(216,179,106,.18)'; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(0, -64, 66, 0, Math.PI*2); ctx.fill(); ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawProjectile(p) {
+  ctx.save();
+  if (p.kind === 'rasengan') {
+    const g = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.r);
+    g.addColorStop(0, '#fff'); g.addColorStop(0.5, '#8fd8ff'); g.addColorStop(1, 'rgba(60,140,255,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#e5f7ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r*0.6, frame*0.4, frame*0.4 + 4); ctx.stroke();
+  } else if (p.kind === 'fire') {
+    const g = ctx.createRadialGradient(p.x, p.y, 4, p.x, p.y, p.r);
+    g.addColorStop(0, '#fff4b0'); g.addColorStop(0.4, '#ffb13f'); g.addColorStop(1, 'rgba(255,60,20,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+  } else if (p.kind === 'kunai') {
+    ctx.translate(p.x, p.y); ctx.rotate(Math.atan2(p.vy, p.vx));
+    ctx.fillStyle = '#9aa3b0'; ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-2, -4); ctx.lineTo(-2, 4); ctx.fill();
+    ctx.fillStyle = '#333'; ctx.fillRect(-12, -1.5, 10, 3);
+  } else if (p.kind === 'quake') {
+    ctx.fillStyle = '#7a5a3a'; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(p.x - 14 + i*10, GROUND); ctx.lineTo(p.x - 8 + i*10, GROUND - 26 - i*6); ctx.lineTo(p.x - 2 + i*10, GROUND); ctx.fill(); }
+  } else if (p.kind === 'sand') {
+    const h = p.delay > 0 ? 6 : Math.min(130, (55 - p.life) * 12);
+    ctx.fillStyle = '#d8b36a'; ctx.beginPath(); ctx.ellipse(p.x, GROUND - h/2, p.r, h/2 + 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(160,120,60,.5)'; for (let i = 0; i < 6; i++) ctx.fillRect(p.x - p.r + i*15, GROUND - h + (i*13 % 20), 8, 4);
+  }
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r); ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath(); }
+
+function drawHUD() {
+  const main = fighters.filter(f => !f.isClone);
+  main.forEach((f, i) => {
+    const left = i === 0, bw = 360, x = left ? 30 : W - 30 - bw;
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; roundRect(x - 8, 14, bw + 16, 96, 10); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px Trebuchet MS'; ctx.textAlign = left ? 'left' : 'right';
+    const label = (mode === 0 && i === 1) ? f.ch.name + ' (CPU)' : f.ch.name;
+    ctx.fillText(label, left ? x : x + bw, 36);
+    // vida
+    ctx.fillStyle = '#3a1a1a'; ctx.fillRect(x, 44, bw, 18);
+    const hpw = bw * f.hp / f.maxHp;
+    ctx.fillStyle = f.hp / f.maxHp > 0.3 ? '#4fd36b' : '#ff4a4a';
+    ctx.fillRect(left ? x : x + bw - hpw, 44, hpw, 18);
+    // chakra
+    ctx.fillStyle = '#10203a'; ctx.fillRect(x, 66, bw, 10);
+    const cw = bw * f.chakra / 100;
+    ctx.fillStyle = '#4aa8ff'; ctx.fillRect(left ? x : x + bw - cw, 66, cw, 10);
+    // poderes
+    ctx.font = '13px Trebuchet MS';
+    f.ch.powers.forEach((p, j) => {
+      const ready = f.cds[j] <= 0 && f.chakra >= p.cost;
+      ctx.fillStyle = ready ? '#ffd23f' : '#777';
+      const keyLbl = i === 0 ? ['K','L'][j] : (mode === 1 ? ['2','3'][j] : '');
+      const txt = (keyLbl ? '[' + keyLbl + '] ' : '') + p.name + ' (' + p.cost + ')';
+      const px = left ? x + j * 180 : x + bw - j * 180;
+      ctx.fillText(txt, px, 98);
+    });
+  });
+  ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = 'bold 34px Trebuchet MS';
+  ctx.fillText(Math.ceil(roundTimer / 60), W/2, 60);
+}
+
+function drawTexts() {
+  ctx.textAlign = 'center';
+  for (const t of texts) {
+    ctx.globalAlpha = Math.min(1, t.life / 20);
+    ctx.font = 'bold 22px Trebuchet MS'; ctx.lineWidth = 4; ctx.strokeStyle = '#000';
+    ctx.strokeText(t.t, t.x, t.y); ctx.fillStyle = t.color; ctx.fillText(t.t, t.x, t.y);
+    t.y -= 0.8; t.life--;
+  }
+  ctx.globalAlpha = 1; texts = texts.filter(t => t.life > 0);
+}
+
+function bigText(t, y, size, color) {
+  ctx.textAlign = 'center'; ctx.font = `bold ${size}px Trebuchet MS`;
+  ctx.lineWidth = 8; ctx.strokeStyle = '#000'; ctx.strokeText(t, W/2, y);
+  ctx.fillStyle = color; ctx.fillText(t, W/2, y);
+}
+
+// ---------- Menus ----------
+function onMenuKey(code) {
+  if (state === 'title') {
+    if (code === 'ArrowUp' || code === 'KeyW' || code === 'ArrowDown' || code === 'KeyS') mode = 1 - mode;
+    if (code === 'Enter' || code === 'Space' || code === 'KeyJ') { state = 'select'; selStep = 0; }
+  } else if (state === 'select') {
+    const s = selStep;
+    if (code === 'ArrowLeft' || code === 'KeyA') sel[s] = (sel[s] + CHARS.length - 1) % CHARS.length;
+    if (code === 'ArrowRight' || code === 'KeyD') sel[s] = (sel[s] + 1) % CHARS.length;
+    if (code === 'Escape') { if (selStep) selStep = 0; else state = 'title'; }
+    if (code === 'Enter' || code === 'Space' || code === 'KeyJ' || code === 'Digit1') {
+      if (selStep === 0) { selStep = 1; if (mode === 0) sel[1] = (sel[0] + 1 + Math.floor(Math.random()*(CHARS.length-1))) % CHARS.length; }
+      else startFight();
+    }
+  } else if (state === 'over') {
+    if (code === 'Enter' || code === 'Space' || code === 'KeyJ') state = 'select', selStep = 0;
+    if (code === 'KeyR') startFight();
+  }
+}
+function onMenuTouch(k) {
+  const map = { up:'ArrowUp', left:'ArrowLeft', right:'ArrowRight', atk:'Enter', p1:'Enter', p2:'KeyR' };
+  if (state !== 'fight' && map[k]) onMenuKey(map[k]);
+}
+cv.addEventListener('click', () => { if (state !== 'fight') onMenuKey('Enter'); });
+
+function drawTitle() {
+  drawBg();
+  ctx.fillStyle = 'rgba(10,8,20,.55)'; ctx.fillRect(0, 0, W, H);
+  bigText('BATALHA NINJA', 170, 72, '#ff8a1f');
+  ctx.fillStyle = '#f3eee4'; ctx.font = '20px Trebuchet MS'; ctx.textAlign = 'center';
+  ctx.fillText('Escolha o modo (W/S ou ↑/↓) e aperte ENTER', W/2, 220);
+  ['Jogador vs CPU', '2 Jogadores'].forEach((t, i) => {
+    const y = 290 + i * 60, on = mode === i;
+    ctx.fillStyle = on ? '#ff8a1f' : 'rgba(255,255,255,.12)'; roundRect(W/2 - 160, y - 32, 320, 46, 10); ctx.fill();
+    ctx.fillStyle = on ? '#14121c' : '#f3eee4'; ctx.font = 'bold 24px Trebuchet MS'; ctx.fillText(t, W/2, y);
+  });
+  ctx.fillStyle = '#d8d2e4'; ctx.font = '15px Trebuchet MS';
+  ctx.fillText('Ataque perto com J, use poderes com K e L. Segure S para recarregar chakra.', W/2, 450);
+}
+
+function drawSelect() {
+  drawBg();
+  ctx.fillStyle = 'rgba(10,8,20,.6)'; ctx.fillRect(0, 0, W, H);
+  const who = selStep === 0 ? 'Jogador 1' : (mode === 0 ? 'Adversário (CPU)' : 'Jogador 2');
+  bigText(who + ': escolha seu ninja', 70, 36, '#ffd23f');
+  CHARS.forEach((c, i) => {
+    const x = 120 + i * 180, y = 300;
+    const picked0 = sel[0] === i, picked1 = selStep === 1 && sel[1] === i;
+    const cur = sel[selStep] === i;
+    ctx.fillStyle = cur ? 'rgba(255,138,31,.35)' : 'rgba(255,255,255,.08)';
+    roundRect(x - 70, 120, 140, 300, 14); ctx.fill();
+    if (cur) { ctx.strokeStyle = '#ff8a1f'; ctx.lineWidth = 4; roundRect(x - 70, 120, 140, 300, 14); ctx.stroke(); }
+    const f = new Fighter(c, x, 1, 0); f.y = y; drawFighter(f);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px Trebuchet MS'; ctx.textAlign = 'center';
+    ctx.fillText(c.name, x, 340);
+    ctx.font = '12px Trebuchet MS'; ctx.fillStyle = '#ffd23f';
+    ctx.fillText(c.powers[0].name, x, 366); ctx.fillText(c.powers[1].name, x, 384);
+    ctx.fillStyle = '#bbb'; ctx.fillText('Vida ' + c.hp + ' · Vel ' + c.speed, x, 406);
+    if (picked0 && selStep === 1) { ctx.fillStyle = '#4fd36b'; ctx.font = 'bold 14px Trebuchet MS'; ctx.fillText('J1', x, 140); }
+    if (picked1) { ctx.fillStyle = '#ff5a5a'; ctx.font = 'bold 14px Trebuchet MS'; ctx.fillText(mode ? 'J2' : 'CPU', x + 40, 140); }
+  });
+  ctx.fillStyle = '#f3eee4'; ctx.font = '18px Trebuchet MS'; ctx.textAlign = 'center';
+  ctx.fillText('← → para escolher · ENTER para confirmar · ESC para voltar', W/2, 480);
+}
+
+// ---------- Loop ----------
+function loop() {
+  frame++;
+  ctx.save();
+  if (state === 'title') drawTitle();
+  else if (state === 'select') drawSelect();
+  else {
+    if (state === 'fight' && introTimer <= 0) {
+      const p1 = readHuman(P1KEYS, true);
+      const p2 = mode === 1 ? readHuman(P2KEYS, false) : null;
+      for (const f of [...fighters]) {
+        let inp;
+        if (f.isClone) inp = aiInput(f);
+        else if (f.idx === 0) inp = p1;
+        else inp = p2 || aiInput(f);
+        updateFighter(f, inp);
+      }
+      fighters = fighters.filter(f => !(f.isClone && f.hp <= 0));
+      updateProjectiles();
+      roundTimer--;
+      const [a, b] = fighters;
+      if (a.hp <= 0 || b.hp <= 0 || roundTimer <= 0) {
+        state = 'over';
+        winner = a.hp === b.hp ? null : (a.hp > b.hp ? a : b);
+        fighters = fighters.filter(f => !f.isClone);
+        projectiles = [];
+      }
+    } else if (introTimer > 0) introTimer--;
+    // física dos derrotados
+    if (state === 'over') for (const f of fighters) { f.vy += GRAV; f.y = Math.min(GROUND, f.y + f.vy); f.x += f.vx; f.vx *= 0.9; }
+
+    if (shake > 0) { ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake); shake *= 0.85; if (shake < 0.5) shake = 0; }
+    drawBg();
+    projectiles.filter(p => p.kind === 'sand' || p.kind === 'quake').forEach(drawProjectile);
+    fighters.forEach(drawFighter);
+    projectiles.filter(p => p.kind !== 'sand' && p.kind !== 'quake').forEach(drawProjectile);
+    for (const p of particles) { p.x += p.vx; p.y += p.vy; p.life--; ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 20));
+      ctx.fillStyle = p.color; ctx.fillRect(p.x - p.s/2, p.y - p.s/2, p.s, p.s); }
+    ctx.globalAlpha = 1; particles = particles.filter(p => p.life > 0);
+    drawTexts();
+    ctx.restore(); ctx.save();
+    drawHUD();
+    if (introTimer > 60) bigText('PREPARAR...', H/2, 64, '#ffd23f');
+    else if (introTimer > 0) bigText('LUTEM!', H/2, 80, '#ff8a1f');
+    if (state === 'over') {
+      ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(0, 0, W, H);
+      bigText(winner ? winner.ch.name + ' venceu!' : 'Empate!', H/2 - 20, 68, '#ffd23f');
+      ctx.fillStyle = '#fff'; ctx.font = '20px Trebuchet MS'; ctx.textAlign = 'center';
+      ctx.fillText('R para revanche · ENTER para trocar de ninja', W/2, H/2 + 40);
+    }
+  }
+  ctx.restore();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
