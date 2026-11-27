@@ -23,7 +23,7 @@ SEGS = [
     (44.8, "E você? O que faria com essa velocidade? Comenta aí! E segue pra mais, E se."),
 ]
 SR = 44100
-PITCH = 0.79  # <1 = voz mais grossa
+PITCH = 0.87  # <1 = voz mais grossa
 
 def synth(text, ls):
     out = os.path.join(D, 'seg.wav')
@@ -55,7 +55,7 @@ for k, (t0, text) in enumerate(SEGS):
 voice = sosfilt(butter(2, 90, 'highpass', fs=SR, output='sos'), voice)
 pres = sosfilt(butter(2, [2500, 6000], 'bandpass', fs=SR, output='sos'), voice)
 bass = sosfilt(butter(2, 220, 'lowpass', fs=SR, output='sos'), voice)
-voice = voice + 0.35 * pres + 0.6 * bass
+voice = voice + 0.35 * pres + 0.4 * bass
 voice = np.tanh(voice / (np.abs(voice).max() + 1e-9) * 2.2) * 0.95
 
 with wave.open(os.path.join(D, '../vid/flash_audio.wav')) as w:
