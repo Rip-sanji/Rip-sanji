@@ -79,7 +79,7 @@ boing(1.55); boing(41.1, 340); boing(43.55, 300, .2)
 def pop(t0, g=.35):
     n = int(.12 * SR); x = np.arange(n) / SR
     add(np.sin(2 * np.pi * np.cumsum(900 - 600 * x / .12) / SR) * env(n, .001, .03), t0, g)
-for t0 in [11.5, 19.6, 36.1]: pop(t0)
+for t0 in [11.5, 20.6, 23.5, 36.1]: pop(t0)
 
 # ---------- sonic boom ----------
 n = int(2.5 * SR); x = np.arange(n) / SR
@@ -104,6 +104,13 @@ add(fr, 19.2, .18)
 wa = filt(noise(3.4), 'bandpass', [600, 6000]) * (.6 + .4 * np.sin(np.arange(int(3.4 * SR)) / SR * 40))
 wa *= np.clip(np.linspace(0, 6, len(wa)), 0, 1) * np.clip(np.linspace(6, 0, len(wa)), 0, 1)
 add(wa, 22.6, .22)
+
+
+# ---------- water explosions ----------
+for t0, sc in [(22.85, 1), (23.5, 1.6), (24.15, 1), (24.8, 1.2), (25.45, 1.1)]:
+    n = int(2 * SR); x = np.arange(n) / SR
+    sp = filt(noise(2), 'bandpass', [400, 7000]) * env(n, .004, .35) + filt(noise(2), 'lowpass', 150) * env(n, .005, .25) * 1.5
+    add(sp, t0, .5 * sc, pan=rng.uniform(-.3, .3))
 
 # ---------- warp riser + time reversal ----------
 n = int(5 * SR); x = np.arange(n) / SR

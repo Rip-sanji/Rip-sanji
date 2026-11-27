@@ -5,7 +5,7 @@ const path = require('path'), fs = require('fs');
 (async () => {
   const [, , page, mode, outdir, a, b, c] = process.argv;
   const br = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--allow-file-access-from-files'] });
-  const p = await br.newPage({ viewport: { width: 720, height: 1280 } });
+  const p = await br.newPage({ viewport: { width: 720, height: 1280 }, deviceScaleFactor: +(process.env.DPR || 1) });
   p.on('pageerror', e => console.log('ERR', e.message));
   await p.goto('file://' + path.join(__dirname, page));
   await p.waitForFunction(() => window.renderAt, null, { timeout: 120000 });
