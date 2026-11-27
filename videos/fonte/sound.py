@@ -33,8 +33,8 @@ bassline = [55, 55, 65.4, 49]
 for k, b in enumerate(beats):
     if 36 <= b < 38: continue  # silence during time reversal
     quiet = .45 if (38 <= b < 42.6) else 1
-    if k % 4 == 0: add(kick, b, .55 * quiet)
-    if k % 4 == 2 and b > 4.5: add(snare, b, .22 * quiet)
+    if k % 4 == 0: add(kick, b, .45 * quiet)
+    if k % 4 == 2 and b > 4.5: add(snare, b, .17 * quiet)
     add(hat, b + (0.5 * 60 / bpm_at(b) / 2 if k % 2 else 0), .12 * quiet, pan=.3 if k % 2 else -.3)
     if b > 4.5:
         f = bassline[(k // 8) % 4] * (2 if b > 20.6 else 1)
@@ -125,6 +125,30 @@ for k in range(28):
 add(rev * .3 + tick * .4, 36, .9)
 # whiteout swell
 n = int(1.6 * SR); add(filt(noise(1.6), 'lowpass', 3000) * np.linspace(0, 1, n) ** 2, 36.4, .4)
+
+
+# ---------- speed-doubling bips (pitch rises each step) ----------
+STEPS = [4.5, 5.5, 7, 8.5, 10, 11.5, 13, 15, 16.6, 19, 20.6, 22, 23.5, 26, 27.2, 28.4, 29.6]
+for k, t0 in enumerate(STEPS):
+    f = 520 * 2 ** (k / 12 * 1.5); n = int(.22 * SR); x = np.arange(n) / SR
+    b = (np.sin(2 * np.pi * f * x) + .4 * np.sin(2 * np.pi * 2 * f * x)) * env(n, .002, .07)
+    add(b, t0, .16)
+for k in range(28):  # fast counter during light-speed run
+    t0 = 31 + k * 4.6 / 12 * (12 / 28) * 1.0
+    if t0 > 35.6: break
+    n = int(.1 * SR); x = np.arange(n) / SR; f = 900 * 2 ** (k / 14)
+    add(np.sin(2 * np.pi * f * x) * env(n, .001, .03), t0, .09)
+
+# ---------- riser before the sonic boom ----------
+n = int(1.7 * SR); x = np.arange(n) / SR
+rz = filt(noise(1.7), 'bandpass', [800, 5000]) * (x / 1.7) ** 2.5 + np.sin(2 * np.pi * np.cumsum(200 * 2 ** (x * 2)) / SR) * (x / 1.7) ** 2 * .3
+add(rz, 15.0, .35)
+
+# ---------- caption swooshes ----------
+for t0 in [4.5, 8.5, 10, 13, 15, 16.6, 19, 20.6, 22.6, 26, 28.4, 31, 34.6, 38, 42.6, 44.6]:
+    n = int(.18 * SR); x = np.linspace(0, 1, n)
+    sw = filt(noise(.18), 'bandpass', [2500, 9000]) * np.sin(np.pi * x) ** 2
+    add(sw, t0 - .05, .07)
 
 # ---------- CTA ding ----------
 for f, d in [(880, 0), (1320, .12)]:
