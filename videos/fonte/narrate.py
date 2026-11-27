@@ -23,11 +23,15 @@ SEGS = [
     (44.8, "E você? O que faria com essa velocidade? Comenta aí! E segue pra mais, E se."),
 ]
 SR = 44100
+PITCH = 0.79  # <1 = voz mais grossa
 
 def synth(text, ls):
     out = os.path.join(D, 'seg.wav')
     subprocess.run([sys.executable, '-m', 'piper', '-m', MODEL, '-f', out, '--length-scale', str(ls), '--sentence-silence', '0.1'],
                    input=text.encode(), check=True, capture_output=True)
+    deep = os.path.join(D, 'seg_deep.wav')
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', out, '-af', f'asetrate={16000*PITCH:.0f},aresample=16000,atempo={1/PITCH:.4f}', deep], check=True)
+    out = deep
     with wave.open(out) as w:
         x = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
         sr = w.getframerate()
@@ -50,7 +54,8 @@ for k, (t0, text) in enumerate(SEGS):
 # voice EQ: cut rumble, presence boost, gentle compression
 voice = sosfilt(butter(2, 90, 'highpass', fs=SR, output='sos'), voice)
 pres = sosfilt(butter(2, [2500, 6000], 'bandpass', fs=SR, output='sos'), voice)
-voice = voice + 0.35 * pres
+bass = sosfilt(butter(2, 220, 'lowpass', fs=SR, output='sos'), voice)
+voice = voice + 0.35 * pres + 0.6 * bass
 voice = np.tanh(voice / (np.abs(voice).max() + 1e-9) * 2.2) * 0.95
 
 with wave.open(os.path.join(D, '../vid/flash_audio.wav')) as w:
